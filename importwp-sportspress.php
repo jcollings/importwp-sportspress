@@ -5,7 +5,7 @@ Plugin URI: https://www.importwp.com/
 Description: Extend ImportWP Pro Custom fields to import into SportsPress.
 Author: James Collings <james@jclabs.co.uk>
 Author URI: http://www.jamescollings.co.uk
-Version: 0.1
+Version: 0.2.0
 */
 
 /**
@@ -32,7 +32,7 @@ class IWP_SportsPress{
 	 *
 	 * @var string
 	 */
-	protected $version = '0.1';
+	protected $version = '0.2.0';
 
 	/**
 	 * Minimum required version if ImportWP
@@ -68,7 +68,9 @@ class IWP_SportsPress{
 			return;
 		}
 
+		require_once __DIR__ . '/libs/class-iwp-sportspress-base.php';
 		require_once __DIR__ . '/libs/class-iwp-sportspress-player.php';
+		require_once __DIR__ . '/libs/class-iwp-sportspress-team.php';
 	}
 
 }

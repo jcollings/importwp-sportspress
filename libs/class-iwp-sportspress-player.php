@@ -10,7 +10,7 @@
 /**
  * Class IWP_SportsPress_Player
  */
-class IWP_SportsPress_Player {
+class IWP_SportsPress_Player extends IWP_SportsPress_Base {
 
 	private $positions = array();
 	private $leagues = array();
@@ -18,12 +18,26 @@ class IWP_SportsPress_Player {
 	private $metrics = array();
 	private $past_teams = array();
 	private $current_teams = array();
+	private $installed = false;
 
 	public function __construct() {
-		add_filter( 'iwp/before_mapper_process', array( $this, 'iwp_before_mapper_process' ), 20 );
+
 		add_filter( 'iwp/custom_fields/list', array( $this, 'iwp_custom_fields_list' ), 20 );
+		add_action( 'jci/before_import', array( $this, 'install_hooks' ) );
+	}
+
+	public function install_hooks() {
+
+		if ( $this->installed || ! $this->is_template_active( JCI()->importer->get_template(), 'post', 'sp_player' ) ) {
+			return;
+		}
+
+		// Install Hooks
+		add_filter( 'iwp/before_mapper_process', array( $this, 'iwp_before_mapper_process' ), 20 );
 		add_filter( 'iwp/custom_field', array( $this, 'iwp_custom_field' ), 10, 4 );
 		add_action( 'iwp_after_row_save', array( $this, 'iwp_after_row_save' ), 10, 3 );
+
+		$this->installed = true;
 	}
 
 	/**
@@ -35,9 +49,7 @@ class IWP_SportsPress_Player {
 	 */
 	function iwp_after_row_save( IWP_Template $template, \ImportWP\Importer\ParsedData $data, \ImportWP\Importer $importer ) {
 
-		if('post' === $template->get_import_type() && 'sp_player' === $template->get_import_type_name()){
-			$this->process_virtual_fields( $data->getValue( 'ID' ) );
-		}
+		$this->process_virtual_fields( $data->getValue( 'ID' ) );
 	}
 
 	/**
@@ -47,13 +59,19 @@ class IWP_SportsPress_Player {
 	 */
 	function process_virtual_fields( $player_id ) {
 
-		wp_set_object_terms( $player_id, $this->positions, 'sp_position', false );
-		wp_set_object_terms( $player_id, $this->leagues, 'sp_league', false );
-		wp_set_object_terms( $player_id, $this->seasons, 'sp_season', false );
+		if ( false !== $this->positions ) {
+			wp_set_object_terms( $player_id, $this->positions, 'sp_position', false );
+		}
+		if ( false !== $this->leagues ) {
+			wp_set_object_terms( $player_id, $this->leagues, 'sp_league', false );
+		}
+		if ( false !== $this->seasons ) {
+			wp_set_object_terms( $player_id, $this->seasons, 'sp_season', false );
+		}
 
 		if ( ! empty( $this->current_teams ) ) {
 			foreach ( $this->current_teams as $team ) {
-				$team_id = $this->store_team( $team );
+				$team_id = $this->store_team( $team, $this->leagues, $this->seasons );
 				add_post_meta( $player_id, 'sp_current_team', $team_id );
 				add_post_meta( $player_id, 'sp_team', $team_id );
 			}
@@ -61,7 +79,7 @@ class IWP_SportsPress_Player {
 
 		if ( ! empty( $this->past_teams ) ) {
 			foreach ( $this->past_teams as $team ) {
-				$team_id = $this->store_team( $team );
+				$team_id = $this->store_team( $team, $this->leagues, $this->seasons );
 				add_post_meta( $player_id, 'sp_team', $team_id );
 			}
 		}
@@ -89,40 +107,37 @@ class IWP_SportsPress_Player {
 			'sp_current_team'
 		);
 
-		$delimiter = apply_filters('iwp/delimiter', ',');
-		$delimiter = apply_filters('iwp/delimiter/sportspress', $delimiter);
+		$delimiter = apply_filters( 'iwp/delimiter', ',' );
+		$delimiter = apply_filters( 'iwp/delimiter/sportspress', $delimiter );
 
 		// Update positions
-		$positions_delimiter = apply_filters('iwp/delimiter/sp_position', $delimiter);
-		$this->positions = explode( $positions_delimiter, $data->getValue( 'sp_position', 'custom_fields' ) );
+		$this->positions = $this->get_taxonomy_value( 'sp_position', $delimiter, $data );
 
 		// Update leagues
-		$leagues_delimiter = apply_filters('iwp/delimiter/sp_league', $delimiter);
-		$this->leagues = explode( $leagues_delimiter, $data->getValue( 'sp_league', 'custom_fields' ) );
+		$this->leagues = $this->get_taxonomy_value( 'sp_league', $delimiter, $data );
 
 		// Update seasons
-		$seasons_delimiter = apply_filters('iwp/delimiter/sp_season', $delimiter);
-		$this->seasons = explode( $seasons_delimiter, $data->getValue( 'sp_season', 'custom_fields' ) );
+		$this->seasons = $this->get_taxonomy_value( 'sp_season', $delimiter, $data );
 
 		// Past Teams
-		$past_teams_delimiter = apply_filters('iwp/delimiter/sp_past_team', $delimiter);
-		$this->past_teams = explode( $past_teams_delimiter, $data->getValue( 'sp_past_team', 'custom_fields' ) );
+		$past_teams_delimiter = apply_filters( 'iwp/delimiter/sp_past_team', $delimiter );
+		$this->past_teams     = explode( $past_teams_delimiter, $data->getValue( 'sp_past_team', 'custom_fields' ) );
 
 		// Current Teams
-		$current_teams_delimiter = apply_filters('iwp/delimiter/sp_current_team', $delimiter);
-		$this->current_teams = explode( $current_teams_delimiter, $data->getValue( 'sp_current_team', 'custom_fields' ) );
+		$current_teams_delimiter = apply_filters( 'iwp/delimiter/sp_current_team', $delimiter );
+		$this->current_teams     = explode( $current_teams_delimiter, $data->getValue( 'sp_current_team', 'custom_fields' ) );
 
 		// metrics
 		$metrics = $this->get_player_metrics();
-		if(!empty($metrics)){
-			foreach($metrics as $metric){
-				$metric_key = 'sp_metric_' . $metric;
-				$this->metrics[$metric] = $data->getValue($metric_key, 'custom_fields');
-				$fields_to_clear[] = $metric_key;
+		if ( ! empty( $metrics ) ) {
+			foreach ( $metrics as $metric ) {
+				$metric_key               = 'sp_metric_' . $metric;
+				$this->metrics[ $metric ] = $data->getValue( $metric_key, 'custom_fields' );
+				$fields_to_clear[]        = $metric_key;
 			}
 		}
 
-		$custom_fields   = $data->getData( 'custom_fields' );
+		$custom_fields = $data->getData( 'custom_fields' );
 
 		// clear virtual fields so they dont get set
 		foreach ( $fields_to_clear as $key ) {
@@ -152,7 +167,7 @@ class IWP_SportsPress_Player {
 
 			case 'sp_team':
 
-				$value = $this->store_team( $value );
+				$value = $this->store_team( $value, $this->leagues, $this->seasons );
 				break;
 		}
 
@@ -160,48 +175,25 @@ class IWP_SportsPress_Player {
 	}
 
 	/**
-	 * Insert or fetch SportsPress team
-	 *
-	 * @param $team
-	 *
-	 * @return int|WP_Error
-	 */
-	function store_team( $team ) {
-		$item = get_page_by_title( $team, OBJECT, 'sp_team' );
-		if ( $item ) {
-			$team_id = $item->ID;
-		} else {
-			$team_id = wp_insert_post( array( 'post_type'   => 'sp_team',
-			                                  'post_status' => 'publish',
-			                                  'post_title'  => wp_strip_all_tags( $team )
-			) );
-			wp_set_object_terms( $team_id, $this->leagues, 'sp_league', false );
-			wp_set_object_terms( $team_id, $this->seasons, 'sp_season', false );
-		}
-
-		return $team_id;
-	}
-
-	/**
 	 * Get list of SportsPress player metrics
 	 *
 	 * @return array
 	 */
-	function get_player_metrics(){
+	function get_player_metrics() {
 
 		$output = array();
 
 		$args = array(
-			'post_type' => 'sp_metric',
-			'numberposts' => -1,
-			'posts_per_page' => -1,
-			'orderby' => 'menu_order',
-			'order' => 'ASC',
+			'post_type'      => 'sp_metric',
+			'numberposts'    => - 1,
+			'posts_per_page' => - 1,
+			'orderby'        => 'menu_order',
+			'order'          => 'ASC',
 		);
 
 		$vars = get_posts( $args );
-		if($vars){
-			foreach($vars as $var){
+		if ( $vars ) {
+			foreach ( $vars as $var ) {
 				$output[] = $var->post_name;
 			}
 		}
@@ -218,10 +210,7 @@ class IWP_SportsPress_Player {
 	 */
 	function iwp_custom_fields_list( $list ) {
 
-		$type      = JCI()->importer->get_template()->get_import_type(); // post, user, tax
-		$post_type = JCI()->importer->get_template()->get_import_type_name();
-
-		if('post' === $type && 'sp_player' === $post_type){
+		if ( $this->is_template_active( JCI()->importer->get_template(), 'post', 'sp_player' ) ) {
 
 			$fields = array(
 				'sp_number'       => __( 'Squad Number', 'sportspress' ),
@@ -234,10 +223,10 @@ class IWP_SportsPress_Player {
 			);
 
 			$metrics = $this->get_player_metrics();
-			if(!empty($metrics)){
-				foreach($metrics as $metric){
-					$metric_key = 'sp_metric_' . $metric;
-					$fields[$metric_key] = 'Metric: ' . $metric;
+			if ( ! empty( $metrics ) ) {
+				foreach ( $metrics as $metric ) {
+					$metric_key            = 'sp_metric_' . $metric;
+					$fields[ $metric_key ] = 'Metric: ' . $metric;
 				}
 			}
 
